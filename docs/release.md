@@ -13,7 +13,7 @@ Apple Developer Program、Developer ID証明書、notarization用認証情報は
 
 ```sh
 scripts/package_app.sh
-ditto -c -k --sequesterRsrc --keepParent .build/UsageBar.app .build/UsageBar-0.1.0.zip
+ditto -c -k --norsrc --keepParent .build/UsageBar.app .build/UsageBar-0.1.0.zip
 shasum -a 256 .build/UsageBar-0.1.0.zip > .build/UsageBar-0.1.0.zip.sha256
 ```
 
