@@ -1,0 +1,53 @@
+# Swift / SwiftPM
+.build/
+.swiftpm/
+DerivedData/
+Packages/
+Package.resolved
+
+# Xcode local state
+*.xcuserstate
+*.xcuserdata/
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+
+# Local environment and secrets
+.env
+.env.*
+.envrc
+*.local
+.claude/settings.local.json
+
+# Local credentials and auth files
+auth.json
+.credentials.json
+credentials.json
+*.keychain
+*.keychain-db
+
+# Apple signing / notarization material
+*.p12
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+*.notarytool-profile
+
+# Packaged app artifacts
+*.app
+*.dmg
+*.zip
+*.sha256
+*.pkg
+*.xcarchive
+*.ipa
+
+# Logs
+*.log
