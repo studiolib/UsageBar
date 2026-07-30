@@ -30,7 +30,7 @@ struct UsageWindowRow: View {
 
     private var resetAtText: String {
         guard let resetAt = window.resetAt else { return "リセット: 不明" }
-        return "リセット: \(resetAt.formatted(date: .numeric, time: .shortened))"
+        return "リセット: \(resetAt.formatted(.dateTime.locale(Locale(identifier: "ja_JP")).month().day().weekday(.abbreviated).hour().minute()))"
     }
 
     private var resetDescriptionText: String {

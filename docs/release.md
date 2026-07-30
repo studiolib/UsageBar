@@ -15,9 +15,10 @@ Apple Developer Program、Developer ID証明書、notarization用認証情報は
 scripts/package_app.sh
 ditto -c -k --norsrc --keepParent .build/UsageBar.app .build/UsageBar-0.1.0.zip
 shasum -a 256 .build/UsageBar-0.1.0.zip > .build/UsageBar-0.1.0.zip.sha256
+shasum -a 256 -c .build/UsageBar-0.1.0.zip.sha256
 ```
 
-作成したZIPとSHA-256チェックサムをGitHub Releaseへ添付します。
+チェックサムの照合が成功したZIPとSHA-256チェックサムをGitHub Releaseへ添付します。
 
 ## 利用者向けの初回起動案内
 
@@ -29,10 +30,6 @@ Developer ID署名・notarizationを行わないため、利用者のmacOSでは
 4. 上記で開けない場合は、システム設定の「プライバシーとセキュリティ」からUsageBarを明示的に許可する
 
 Homebrew Cask経由でインストールした場合も、初回起動時のGatekeeper確認は同様です。
-
-## 将来の署名付き配布
-
-将来Apple Developer Programへ加入した場合は、`scripts/package_release.sh` により Developer ID署名、hardened runtime、notarization、staple、Gatekeeper評価を行う署名付き成果物を作れます。この手順はDeveloper ID証明書とnotarytoolのKeychainプロファイルを必要とします。
 
 ## GitHub Release
 
