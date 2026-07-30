@@ -1,10 +1,10 @@
 import Foundation
 
 public protocol ClaudeCredentialImportingProvider: CredentialCachingProvider {
-    func importExistingCredentials() async -> ProviderUsageState
+    func importExistingCredentials() async throws -> UsageSnapshot
 }
 
-public final class ClaudeUsageProvider: ClaudeCredentialImportingProvider, @unchecked Sendable {
+public final class ClaudeUsageProvider: ClaudeCredentialImportingProvider {
     public let provider: Provider = .claude
 
     private let credentialStore: ClaudeOAuthCredentialStore
@@ -33,47 +33,16 @@ public final class ClaudeUsageProvider: ClaudeCredentialImportingProvider, @unch
         self.userAgent = userAgent
     }
 
-    public func fetch() async -> ProviderUsageState {
-        await fetchFromAppKeychain()
-    }
-
-    public func importExistingCredentials() async -> ProviderUsageState {
-        do {
-            _ = try credentialStore.importExistingClaudeCodeCredentials(allowInteraction: true)
-            return await fetchFromAppKeychain()
-        } catch let error as ClaudeUsageProviderError {
-            return failureState(error)
-        } catch let error as KeychainClientError {
-            return failureState(error == .interactionNotAllowed ? .interactionNotAllowed : .authRequired)
-        } catch {
-            return failureState(.authRequired)
-        }
+    public func importExistingCredentials() async throws -> UsageSnapshot {
+        _ = try credentialStore.importExistingClaudeCodeCredentials(allowInteraction: true)
+        return try await fetchSnapshot()
     }
 
     public func deleteCachedCredentials() throws {
         try credentialStore.deleteAppCredentials()
     }
 
-    private func fetchFromAppKeychain() async -> ProviderUsageState {
-        do {
-            let snapshot = try await fetchSnapshot()
-            return ProviderUsageState(
-                provider: .claude,
-                status: .fresh,
-                current: snapshot,
-                lastSuccessful: snapshot,
-                lastFailure: nil,
-                isRefreshing: false)
-        } catch let error as ClaudeUsageProviderError {
-            return failureState(error)
-        } catch let error as KeychainClientError {
-            return failureState(error == .interactionNotAllowed ? .interactionNotAllowed : .authRequired)
-        } catch {
-            return failureState(.unknown)
-        }
-    }
-
-    private func fetchSnapshot() async throws -> UsageSnapshot {
+    public func fetchSnapshot() async throws -> UsageSnapshot {
         var credentials = try credentialStore.readAppCredentials()
         if shouldRefresh(credentials) {
             credentials = try await refresh(credentials)
@@ -156,6 +125,10 @@ public final class ClaudeUsageProvider: ClaudeCredentialImportingProvider, @unch
     private func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         do {
             return try await httpClient.send(request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch {
             throw ClaudeUsageProviderError.networkError
         }
@@ -193,30 +166,12 @@ public final class ClaudeUsageProvider: ClaudeCredentialImportingProvider, @unch
             title: title,
             usedPercent: usedPercent,
             remainingPercent: 100 - usedPercent,
-            resetDescription: resetAt.map { resetDescription(until: $0, now: now) } ?? "不明",
+            resetDescription: resetAt.map { RelativeResetDescriptionFormatter.text(until: $0, now: now) } ?? "不明",
             resetAt: resetAt)
     }
 
     private func normalizePercent(_ value: Double) -> Double {
         UsagePercent.normalize(value)
-    }
-
-    private func resetDescription(until resetAt: Date, now: Date) -> String {
-        let seconds = max(0, Int(resetAt.timeIntervalSince(now).rounded()))
-        let days = seconds / 86_400
-        let hours = seconds % 86_400 / 3_600
-        let minutes = seconds % 3_600 / 60
-
-        if days > 0 {
-            return "\(days)日\(hours)時間後"
-        }
-        if hours > 0 {
-            return "\(hours)時間\(minutes)分後"
-        }
-        if minutes > 0 {
-            return "\(minutes)分後"
-        }
-        return "\(seconds)秒後"
     }
 
     private func planLabel(subscriptionType: String?, rateLimitTier: String?) -> String {
@@ -291,19 +246,6 @@ public final class ClaudeUsageProvider: ClaudeCredentialImportingProvider, @unch
         }
     }
 
-    private func failureState(_ error: ClaudeUsageProviderError) -> ProviderUsageState {
-        ProviderUsageState(
-            provider: .claude,
-            status: error == .authRequired || error == .unauthorized || error == .interactionNotAllowed ? .authRequired : .stale,
-            current: nil,
-            lastSuccessful: nil,
-            lastFailure: UsageFailure(
-                occurredAt: now(),
-                code: error.failureCode,
-                message: error.userMessage,
-                retryAfter: nil),
-            isRefreshing: false)
-    }
 }
 
 private struct ClaudeTokenRefreshResponse: Decodable {

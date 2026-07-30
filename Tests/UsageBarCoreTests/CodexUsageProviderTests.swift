@@ -20,17 +20,16 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.provider, .codex)
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.accountLabel, "Codex")
-        XCTAssertEqual(state.lastSuccessful?.planLabel, "Pro")
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 10)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.remainingPercent, 90)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.resetDescription, "5時間0分後")
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 12)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.remainingPercent, 88)
+        XCTAssertEqual(snapshot.provider, .codex)
+        XCTAssertEqual(snapshot.accountLabel, "Codex")
+        XCTAssertEqual(snapshot.planLabel, "Pro")
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 10)
+        XCTAssertEqual(snapshot.shortWindow?.remainingPercent, 90)
+        XCTAssertEqual(snapshot.shortWindow?.resetDescription, "5時間0分後")
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 12)
+        XCTAssertEqual(snapshot.weeklyWindow?.remainingPercent, 88)
         XCTAssertEqual(httpClient.requests.map(\.url.absoluteString), [
             "https://chatgpt.com/backend-api/wham/usage",
         ])
@@ -74,14 +73,13 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
         let authDataAfterRefresh = try Data(contentsOf: authFileURL)
         let savedCredentials = try CodexCredentialStore.decodeCredentials(
             from: keychain.items[key(CodexCredentialStore.appService, CodexCredentialStore.defaultAccount)]!)
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.accountLabel, "Codex")
-        XCTAssertEqual(state.lastSuccessful?.planLabel, "Plus")
+        XCTAssertEqual(snapshot.accountLabel, "Codex")
+        XCTAssertEqual(snapshot.planLabel, "Plus")
         XCTAssertEqual(savedCredentials.accessToken, "new-access-token")
         XCTAssertEqual(savedCredentials.refreshToken, "new-refresh-token")
         XCTAssertEqual(savedCredentials.lastRefresh, now)
@@ -113,10 +111,10 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: MockHTTPClient(responses: []),
             now: { Date(timeIntervalSince1970: 1_785_196_800) })
 
-        let state = await provider.fetch()
+        await assertThrowsKeychainError(.itemNotFound) {
+            try await provider.fetchSnapshot()
+        }
 
-        XCTAssertEqual(state.status, .authRequired)
-        XCTAssertEqual(state.lastFailure?.code, "auth_required")
     }
 
     func testFetchDoesNotImportCodexCLICredentialsWithoutExplicitReauthentication() async throws {
@@ -134,10 +132,10 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        await assertThrowsKeychainError(.itemNotFound) {
+            try await provider.fetchSnapshot()
+        }
 
-        XCTAssertEqual(state.status, .authRequired)
-        XCTAssertEqual(state.lastFailure?.code, "auth_required")
         XCTAssertTrue(keychain.items.isEmpty)
         XCTAssertTrue(httpClient.requests.isEmpty)
     }
@@ -159,9 +157,9 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.importExistingCredentials()
+        let snapshot = try await provider.importExistingCredentials()
 
-        XCTAssertEqual(state.status, .fresh)
+        XCTAssertEqual(snapshot.accountLabel, "Codex")
         XCTAssertNotNil(keychain.items[key(CodexCredentialStore.appService, CodexCredentialStore.defaultAccount)])
         XCTAssertEqual(httpClient.requests.count, 1)
     }
@@ -193,13 +191,12 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 30)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.remainingPercent, 70)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.resetAt, now.addingTimeInterval(3_600))
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 40)
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 30)
+        XCTAssertEqual(snapshot.shortWindow?.remainingPercent, 70)
+        XCTAssertEqual(snapshot.shortWindow?.resetAt, now.addingTimeInterval(3_600))
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 40)
     }
 
     func testFetchParsesCodexCLIStyleRateLimitShape() async throws {
@@ -232,13 +229,12 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 8)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.resetAt, Date(timeIntervalSince1970: 1_785_218_600))
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 22.5)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.resetAt, Date(timeIntervalSince1970: 1_785_819_800))
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 8)
+        XCTAssertEqual(snapshot.shortWindow?.resetAt, Date(timeIntervalSince1970: 1_785_218_600))
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 22.5)
+        XCTAssertEqual(snapshot.weeklyWindow?.resetAt, Date(timeIntervalSince1970: 1_785_819_800))
     }
 
     func testFetchTreatsSingleCodexRateLimitWindowAsWeeklyLimit() async throws {
@@ -270,14 +266,13 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertNil(state.lastSuccessful?.shortWindow)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.title, "週間制限")
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 18)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.remainingPercent, 82)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.resetAt, Date(timeIntervalSince1970: 1_785_556_800))
+        XCTAssertNil(snapshot.shortWindow)
+        XCTAssertEqual(snapshot.weeklyWindow?.title, "週間制限")
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 18)
+        XCTAssertEqual(snapshot.weeklyWindow?.remainingPercent, 82)
+        XCTAssertEqual(snapshot.weeklyWindow?.resetAt, Date(timeIntervalSince1970: 1_785_556_800))
     }
 
     func testFetchTreatsWholeNumberCodexUtilizationAsPercent() async throws {
@@ -305,11 +300,10 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 1)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.remainingPercent, 99)
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 1)
+        XCTAssertEqual(snapshot.weeklyWindow?.remainingPercent, 99)
     }
 
     func testFetchShowsCodexResetAsUnknownWhenUnavailable() async throws {
@@ -336,12 +330,11 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.remainingPercent, 75)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.resetDescription, "不明")
-        XCTAssertNil(state.lastSuccessful?.weeklyWindow?.resetAt)
+        XCTAssertEqual(snapshot.weeklyWindow?.remainingPercent, 75)
+        XCTAssertEqual(snapshot.weeklyWindow?.resetDescription, "不明")
+        XCTAssertNil(snapshot.weeklyWindow?.resetAt)
     }
 
     func testFetchReportsLimitsUnavailableWhenRateLimitWindowsAreMissing() async throws {
@@ -366,10 +359,10 @@ final class CodexUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        await assertThrowsCodexError(.limitsUnavailable) {
+            try await provider.fetchSnapshot()
+        }
 
-        XCTAssertEqual(state.status, .stale)
-        XCTAssertEqual(state.lastFailure?.code, "limits_unavailable")
     }
 
     private func writeAuthFile(
@@ -446,29 +439,67 @@ final class CodexUsageProviderTests: XCTestCase {
     private func key(_ service: String, _ account: String?) -> String {
         "\(service)|\(account ?? "<nil>")"
     }
+
+    private func assertThrowsCodexError(
+        _ expectedError: CodexUsageProviderError,
+        operation: () async throws -> UsageSnapshot)
+        async
+    {
+        do {
+            _ = try await operation()
+            XCTFail("Expected CodexUsageProviderError.\(expectedError)")
+        } catch let error as CodexUsageProviderError {
+            XCTAssertEqual(error, expectedError)
+        } catch {
+            XCTFail("Expected CodexUsageProviderError.\(expectedError), got \(error)")
+        }
+    }
+
+    private func assertThrowsKeychainError(
+        _ expectedError: KeychainClientError,
+        operation: () async throws -> UsageSnapshot)
+        async
+    {
+        do {
+            _ = try await operation()
+            XCTFail("Expected KeychainClientError.\(expectedError)")
+        } catch let error as KeychainClientError {
+            XCTAssertEqual(error, expectedError)
+        } catch {
+            XCTFail("Expected KeychainClientError.\(expectedError), got \(error)")
+        }
+    }
 }
 
-private final class CodexMockKeychainClient: KeychainClient, @unchecked Sendable {
-    var items: [String: Data]
+private final class CodexMockKeychainClient: KeychainClient {
+    private let itemsStore: Locked<[String: Data]>
+
+    var items: [String: Data] {
+        itemsStore.withLock { $0 }
+    }
 
     init(items: [String: Data]) {
-        self.items = items
+        itemsStore = Locked(items)
     }
 
     func readGenericPassword(service: String, account: String?, allowInteraction: Bool) throws -> Data {
         _ = allowInteraction
-        guard let data = items[key(service, account)] else {
+        guard let data = itemsStore.withLock({ $0[key(service, account)] }) else {
             throw KeychainClientError.itemNotFound
         }
         return data
     }
 
     func writeGenericPassword(_ data: Data, service: String, account: String) throws {
-        items[key(service, account)] = data
+        itemsStore.withLock {
+            $0[key(service, account)] = data
+        }
     }
 
     func deleteGenericPassword(service: String, account: String) throws {
-        items.removeValue(forKey: key(service, account))
+        _ = itemsStore.withLock {
+            $0.removeValue(forKey: key(service, account))
+        }
     }
 
     private func key(_ service: String, _ account: String?) -> String {
@@ -476,19 +507,28 @@ private final class CodexMockKeychainClient: KeychainClient, @unchecked Sendable
     }
 }
 
-private final class MockHTTPClient: HTTPClient, @unchecked Sendable {
-    private(set) var requests: [HTTPRequest] = []
-    private var responses: [HTTPResponse]
+private final class MockHTTPClient: HTTPClient {
+    private let requestsStore = Locked<[HTTPRequest]>([])
+    private let responsesStore: Locked<[HTTPResponse]>
+
+    var requests: [HTTPRequest] {
+        requestsStore.withLock { $0 }
+    }
 
     init(responses: [HTTPResponse]) {
-        self.responses = responses
+        responsesStore = Locked(responses)
     }
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
-        requests.append(request)
-        guard !responses.isEmpty else {
+        requestsStore.withLock {
+            $0.append(request)
+        }
+        guard let response = responsesStore.withLock({ responses -> HTTPResponse? in
+            guard !responses.isEmpty else { return nil }
+            return responses.removeFirst()
+        }) else {
             throw URLError(.badServerResponse)
         }
-        return responses.removeFirst()
+        return response
     }
 }

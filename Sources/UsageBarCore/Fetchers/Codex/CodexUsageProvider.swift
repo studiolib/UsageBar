@@ -1,10 +1,10 @@
 import Foundation
 
 public protocol CodexCredentialImportingProvider: CredentialCachingProvider {
-    func importExistingCredentials() async -> ProviderUsageState
+    func importExistingCredentials() async throws -> UsageSnapshot
 }
 
-public final class CodexUsageProvider: CodexCredentialImportingProvider, @unchecked Sendable {
+public final class CodexUsageProvider: CodexCredentialImportingProvider {
     public let provider: Provider = .codex
 
     private let credentialStore: CodexCredentialStore
@@ -30,41 +30,16 @@ public final class CodexUsageProvider: CodexCredentialImportingProvider, @unchec
         self.clientID = clientID
     }
 
-    public func fetch() async -> ProviderUsageState {
-        do {
-            let snapshot = try await fetchSnapshot()
-            return ProviderUsageState(
-                provider: .codex,
-                status: .fresh,
-                current: snapshot,
-                lastSuccessful: snapshot,
-                lastFailure: nil,
-                isRefreshing: false)
-        } catch let error as CodexUsageProviderError {
-            return failureState(error)
-        } catch is KeychainClientError {
-            return failureState(.authRequired)
-        } catch {
-            return failureState(.unknown)
-        }
-    }
-
     public func deleteCachedCredentials() throws {
         try credentialStore.deleteAppCredentials()
     }
 
-    public func importExistingCredentials() async -> ProviderUsageState {
-        do {
-            _ = try credentialStore.importExistingCodexCredentials()
-            return await fetch()
-        } catch let error as CodexUsageProviderError {
-            return failureState(error)
-        } catch {
-            return failureState(.authRequired)
-        }
+    public func importExistingCredentials() async throws -> UsageSnapshot {
+        _ = try credentialStore.importExistingCodexCredentials()
+        return try await fetchSnapshot()
     }
 
-    private func fetchSnapshot() async throws -> UsageSnapshot {
+    public func fetchSnapshot() async throws -> UsageSnapshot {
         var credentials = try credentialStore.readAppCredentials()
         if shouldRefresh(credentials) {
             credentials = try await refresh(credentials)
@@ -158,6 +133,10 @@ public final class CodexUsageProvider: CodexCredentialImportingProvider, @unchec
     private func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         do {
             return try await httpClient.send(request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch {
             throw CodexUsageProviderError.networkError
         }
@@ -203,32 +182,12 @@ public final class CodexUsageProvider: CodexCredentialImportingProvider, @unchec
             title: title,
             usedPercent: usedPercent,
             remainingPercent: 100 - usedPercent,
-            resetDescription: resetDescription(until: resetAt, now: now),
+            resetDescription: resetAt.map { RelativeResetDescriptionFormatter.text(until: $0, now: now) } ?? "不明",
             resetAt: resetAt)
     }
 
     private func normalizePercent(_ value: Double) -> Double {
         UsagePercent.normalize(value)
-    }
-
-    private func resetDescription(until resetAt: Date?, now: Date) -> String {
-        guard let resetAt else { return "不明" }
-
-        let seconds = max(0, Int(resetAt.timeIntervalSince(now).rounded()))
-        let days = seconds / 86_400
-        let hours = seconds % 86_400 / 3_600
-        let minutes = seconds % 3_600 / 60
-
-        if days > 0 {
-            return "\(days)日\(hours)時間後"
-        }
-        if hours > 0 {
-            return "\(hours)時間\(minutes)分後"
-        }
-        if minutes > 0 {
-            return "\(minutes)分後"
-        }
-        return "\(seconds)秒後"
     }
 
     private func planLabel(_ rawPlan: String?) -> String {
@@ -267,19 +226,6 @@ public final class CodexUsageProvider: CodexCredentialImportingProvider, @unchec
         }
     }
 
-    private func failureState(_ error: CodexUsageProviderError) -> ProviderUsageState {
-        ProviderUsageState(
-            provider: .codex,
-            status: error == .authRequired || error == .unauthorized ? .authRequired : .stale,
-            current: nil,
-            lastSuccessful: nil,
-            lastFailure: UsageFailure(
-                occurredAt: now(),
-                code: error.failureCode,
-                message: error.userMessage,
-                retryAfter: nil),
-            isRefreshing: false)
-    }
 }
 
 private struct CodexTokenRefreshResponse: Decodable {
@@ -295,7 +241,6 @@ private struct CodexTokenRefreshResponse: Decodable {
 }
 
 private struct JWTClaims {
-    var email: String?
     var planLabel: String?
 
     init?(idToken: String) {
@@ -307,7 +252,6 @@ private struct JWTClaims {
             return nil
         }
 
-        email = object["email"] as? String
         planLabel = (object["chatgpt_plan_type"] as? String)
             ?? (object["plan_type"] as? String)
             ?? (object["https://api.openai.com/auth"] as? [String: Any])?["chatgpt_plan_type"] as? String

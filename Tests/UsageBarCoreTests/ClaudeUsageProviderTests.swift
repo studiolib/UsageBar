@@ -41,16 +41,15 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.provider, .claude)
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.accountLabel, "Claude")
-        XCTAssertEqual(state.lastSuccessful?.planLabel, "Max")
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 25)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.remainingPercent, 75)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 10)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.remainingPercent, 90)
+        XCTAssertEqual(snapshot.provider, .claude)
+        XCTAssertEqual(snapshot.accountLabel, "Claude")
+        XCTAssertEqual(snapshot.planLabel, "Max")
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 25)
+        XCTAssertEqual(snapshot.shortWindow?.remainingPercent, 75)
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 10)
+        XCTAssertEqual(snapshot.weeklyWindow?.remainingPercent, 90)
         XCTAssertEqual(httpClient.requests.map(\.url.absoluteString), [
             "https://api.anthropic.com/api/oauth/usage",
         ])
@@ -78,10 +77,9 @@ final class ClaudeUsageProviderTests: XCTestCase {
             ]),
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.planLabel, "Pro")
+        XCTAssertEqual(snapshot.planLabel, "Pro")
     }
 
     func testFetchMapsClaudeRateLimitTierFallbackForPlanLabel() async throws {
@@ -104,10 +102,9 @@ final class ClaudeUsageProviderTests: XCTestCase {
             ]),
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.planLabel, "Pro")
+        XCTAssertEqual(snapshot.planLabel, "Pro")
     }
 
     func testFetchMapsClaudeMaxMultiplierRateLimitTierForPlanLabel() async throws {
@@ -130,10 +127,9 @@ final class ClaudeUsageProviderTests: XCTestCase {
             ]),
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.planLabel, "Max 5x")
+        XCTAssertEqual(snapshot.planLabel, "Max 5x")
     }
 
     func testFetchDoesNotImportClaudeCodeCredentialsByDefaultWhenAppCacheIsMissing() async throws {
@@ -156,9 +152,10 @@ final class ClaudeUsageProviderTests: XCTestCase {
             ]),
             now: { now })
 
-        let state = await provider.fetch()
+        await assertThrowsKeychainError(.itemNotFound) {
+            try await provider.fetchSnapshot()
+        }
 
-        XCTAssertEqual(state.status, .authRequired)
         XCTAssertFalse(keychain.reads.contains { $0.service == ClaudeOAuthCredentialStore.claudeCodeService })
         XCTAssertNil(keychain.items[key(ClaudeOAuthCredentialStore.appService, ClaudeOAuthCredentialStore.defaultAccount)])
     }
@@ -183,10 +180,9 @@ final class ClaudeUsageProviderTests: XCTestCase {
             ]),
             now: { now })
 
-        let state = await provider.importExistingCredentials()
+        let snapshot = try await provider.importExistingCredentials()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.accountLabel, "Claude")
+        XCTAssertEqual(snapshot.accountLabel, "Claude")
         XCTAssertTrue(keychain.reads.contains(KeychainRead(
             service: ClaudeOAuthCredentialStore.claudeCodeService,
             account: nil,
@@ -225,11 +221,10 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        _ = try await provider.fetchSnapshot()
         let saved = try ClaudeOAuthCredentialStore.decodeCredentials(
             from: keychain.items[key(ClaudeOAuthCredentialStore.appService, ClaudeOAuthCredentialStore.defaultAccount)]!)
 
-        XCTAssertEqual(state.status, .fresh)
         XCTAssertEqual(saved.accessToken, "new-token")
         XCTAssertEqual(saved.refreshToken, "new-refresh-token")
         XCTAssertEqual(saved.scopes, ["usage", "profile"])
@@ -267,13 +262,12 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertNil(state.lastSuccessful?.shortWindow)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.title, "週間制限")
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 12)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.remainingPercent, 88)
+        XCTAssertNil(snapshot.shortWindow)
+        XCTAssertEqual(snapshot.weeklyWindow?.title, "週間制限")
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 12)
+        XCTAssertEqual(snapshot.weeklyWindow?.remainingPercent, 88)
     }
 
     func testFetchParsesFlexibleClaudeUsageResponseShape() async throws {
@@ -312,13 +306,12 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 18)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.resetAt, Date(timeIntervalSince1970: 1_785_218_600))
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 35)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.resetAt, Date(timeIntervalSince1970: 1_785_819_800))
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 18)
+        XCTAssertEqual(snapshot.shortWindow?.resetAt, Date(timeIntervalSince1970: 1_785_218_600))
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 35)
+        XCTAssertEqual(snapshot.weeklyWindow?.resetAt, Date(timeIntervalSince1970: 1_785_819_800))
     }
 
     func testFetchParsesClaudeFiveHourLimitWithResetAfterSeconds() async throws {
@@ -356,13 +349,12 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 22)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.remainingPercent, 78)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.resetAt, now.addingTimeInterval(7_200))
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 12)
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 22)
+        XCTAssertEqual(snapshot.shortWindow?.remainingPercent, 78)
+        XCTAssertEqual(snapshot.shortWindow?.resetAt, now.addingTimeInterval(7_200))
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 12)
     }
 
     func testFetchShowsClaudeFiveHourLimitWhenResetIsUnavailable() async throws {
@@ -400,15 +392,14 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.title, "5時間制限")
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 18)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.remainingPercent, 82)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.resetDescription, "不明")
-        XCTAssertNil(state.lastSuccessful?.shortWindow?.resetAt)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 13)
+        XCTAssertEqual(snapshot.shortWindow?.title, "5時間制限")
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 18)
+        XCTAssertEqual(snapshot.shortWindow?.remainingPercent, 82)
+        XCTAssertEqual(snapshot.shortWindow?.resetDescription, "不明")
+        XCTAssertNil(snapshot.shortWindow?.resetAt)
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 13)
     }
 
     func testFetchTreatsWholeNumberClaudeUtilizationAsPercent() async throws {
@@ -446,13 +437,12 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: httpClient,
             now: { now })
 
-        let state = await provider.fetch()
+        let snapshot = try await provider.fetchSnapshot()
 
-        XCTAssertEqual(state.status, .fresh)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.usedPercent, 1)
-        XCTAssertEqual(state.lastSuccessful?.shortWindow?.remainingPercent, 99)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.usedPercent, 13)
-        XCTAssertEqual(state.lastSuccessful?.weeklyWindow?.remainingPercent, 87)
+        XCTAssertEqual(snapshot.shortWindow?.usedPercent, 1)
+        XCTAssertEqual(snapshot.shortWindow?.remainingPercent, 99)
+        XCTAssertEqual(snapshot.weeklyWindow?.usedPercent, 13)
+        XCTAssertEqual(snapshot.weeklyWindow?.remainingPercent, 87)
     }
 
     func testFetchReportsLimitsUnavailableWhenClaudeLimitWindowsAreMissing() async throws {
@@ -475,10 +465,10 @@ final class ClaudeUsageProviderTests: XCTestCase {
             ]),
             now: { now })
 
-        let state = await provider.fetch()
+        await assertThrowsClaudeError(.limitsUnavailable) {
+            try await provider.fetchSnapshot()
+        }
 
-        XCTAssertEqual(state.status, .stale)
-        XCTAssertEqual(state.lastFailure?.code, "limits_unavailable")
     }
 
     func testFetchReturnsAuthRequiredWhenCredentialsAreUnavailable() async {
@@ -489,10 +479,10 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: MockClaudeHTTPClient(responses: []),
             now: { Date(timeIntervalSince1970: 1_785_196_800) })
 
-        let state = await provider.fetch()
+        await assertThrowsKeychainError(.itemNotFound) {
+            try await provider.fetchSnapshot()
+        }
 
-        XCTAssertEqual(state.status, .authRequired)
-        XCTAssertEqual(state.lastFailure?.code, "auth_required")
     }
 
     func testFetchWithAppKeychainOnlyDoesNotReadClaudeCodeCredentials() async throws {
@@ -513,9 +503,10 @@ final class ClaudeUsageProviderTests: XCTestCase {
             httpClient: MockClaudeHTTPClient(responses: []),
             now: { now })
 
-        let state = await provider.fetch()
+        await assertThrowsKeychainError(.itemNotFound) {
+            try await provider.fetchSnapshot()
+        }
 
-        XCTAssertEqual(state.status, .authRequired)
         XCTAssertFalse(keychain.reads.contains { $0.service == ClaudeOAuthCredentialStore.claudeCodeService })
     }
 
@@ -539,9 +530,8 @@ final class ClaudeUsageProviderTests: XCTestCase {
             ]),
             now: { now })
 
-        let state = await provider.importExistingCredentials()
+        _ = try await provider.importExistingCredentials()
 
-        XCTAssertEqual(state.status, .fresh)
         XCTAssertTrue(keychain.reads.contains(KeychainRead(
             service: ClaudeOAuthCredentialStore.claudeCodeService,
             account: nil,
@@ -580,36 +570,80 @@ final class ClaudeUsageProviderTests: XCTestCase {
     private func key(_ service: String, _ account: String?) -> String {
         "\(service)|\(account ?? "*")"
     }
+
+    private func assertThrowsClaudeError(
+        _ expectedError: ClaudeUsageProviderError,
+        operation: () async throws -> UsageSnapshot)
+        async
+    {
+        do {
+            _ = try await operation()
+            XCTFail("Expected ClaudeUsageProviderError.\(expectedError)")
+        } catch let error as ClaudeUsageProviderError {
+            XCTAssertEqual(error, expectedError)
+        } catch {
+            XCTFail("Expected ClaudeUsageProviderError.\(expectedError), got \(error)")
+        }
+    }
+
+    private func assertThrowsKeychainError(
+        _ expectedError: KeychainClientError,
+        operation: () async throws -> UsageSnapshot)
+        async
+    {
+        do {
+            _ = try await operation()
+            XCTFail("Expected KeychainClientError.\(expectedError)")
+        } catch let error as KeychainClientError {
+            XCTAssertEqual(error, expectedError)
+        } catch {
+            XCTFail("Expected KeychainClientError.\(expectedError), got \(error)")
+        }
+    }
 }
 
-private struct KeychainRead: Equatable {
+private struct KeychainRead: Equatable, Sendable {
     var service: String
     var account: String?
     var allowInteraction: Bool
 }
 
-private final class MockKeychainClient: KeychainClient, @unchecked Sendable {
-    var items: [String: Data]
-    private(set) var reads: [KeychainRead] = []
+private final class MockKeychainClient: KeychainClient {
+    private let itemsStore: Locked<[String: Data]>
+    private let readsStore = Locked<[KeychainRead]>([])
+
+    var items: [String: Data] {
+        itemsStore.withLock { $0 }
+    }
+
+    var reads: [KeychainRead] {
+        readsStore.withLock { $0 }
+    }
 
     init(items: [String: Data]) {
-        self.items = items
+        itemsStore = Locked(items)
     }
 
     func readGenericPassword(service: String, account: String?, allowInteraction: Bool) throws -> Data {
-        reads.append(KeychainRead(service: service, account: account, allowInteraction: allowInteraction))
-        guard let data = items[key(service, account)] else {
+        readsStore.withLock {
+            $0.append(KeychainRead(service: service, account: account, allowInteraction: allowInteraction))
+        }
+        guard let data = itemsStore.withLock({ $0[key(service, account)] }) else {
             throw KeychainClientError.itemNotFound
         }
         return data
     }
 
     func writeGenericPassword(_ data: Data, service: String, account: String) throws {
-        items[key(service, account)] = data
+        itemsStore.withLock {
+            $0[key(service, account)] = data
+        }
     }
 
     func deleteGenericPassword(service: String, account: String) throws {
-        items.removeValue(forKey: key(service, account))
+        _ = itemsStore.withLock {
+            $0.removeValue(forKey: key(service, account))
+        }
     }
 
     private func key(_ service: String, _ account: String?) -> String {
@@ -617,19 +651,28 @@ private final class MockKeychainClient: KeychainClient, @unchecked Sendable {
     }
 }
 
-private final class MockClaudeHTTPClient: HTTPClient, @unchecked Sendable {
-    private(set) var requests: [HTTPRequest] = []
-    private var responses: [HTTPResponse]
+private final class MockClaudeHTTPClient: HTTPClient {
+    private let requestsStore = Locked<[HTTPRequest]>([])
+    private let responsesStore: Locked<[HTTPResponse]>
+
+    var requests: [HTTPRequest] {
+        requestsStore.withLock { $0 }
+    }
 
     init(responses: [HTTPResponse]) {
-        self.responses = responses
+        responsesStore = Locked(responses)
     }
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
-        requests.append(request)
-        guard !responses.isEmpty else {
+        requestsStore.withLock {
+            $0.append(request)
+        }
+        guard let response = responsesStore.withLock({ responses -> HTTPResponse? in
+            guard !responses.isEmpty else { return nil }
+            return responses.removeFirst()
+        }) else {
             throw URLError(.badServerResponse)
         }
-        return responses.removeFirst()
+        return response
     }
 }

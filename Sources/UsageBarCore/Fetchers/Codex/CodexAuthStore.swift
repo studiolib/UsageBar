@@ -8,7 +8,7 @@ public struct CodexAuthCredentials: Equatable, Sendable {
     public var lastRefresh: Date?
 }
 
-public final class CodexAuthStore: @unchecked Sendable {
+public final class CodexAuthStore: Sendable {
     public let authFileURL: URL
 
     public init(authFileURL: URL = CodexAuthStore.defaultAuthFileURL()) {

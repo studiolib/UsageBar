@@ -8,10 +8,12 @@ public final class UsageStore: ObservableObject {
     @Published public private(set) var isPerformingOperation = false
 
     private let usageProviders: [any UsageProvider]
+    private let credentialCommands: CredentialCommandService
     private let nowProvider: @MainActor () -> Date
 
     public init(now: Date = Date(), nowProvider: @escaping @MainActor () -> Date = Date.init) {
         usageProviders = []
+        credentialCommands = CredentialCommandService(usageProviders: [])
         self.nowProvider = nowProvider
         lastUpdated = now
         states = Self.makeDummyStates(now: now)
@@ -23,9 +25,10 @@ public final class UsageStore: ObservableObject {
         nowProvider: @escaping @MainActor () -> Date = Date.init)
     {
         self.usageProviders = usageProviders
+        credentialCommands = CredentialCommandService(usageProviders: usageProviders)
         self.nowProvider = nowProvider
         lastUpdated = now
-        states = Self.makeInitialStates()
+        states = Self.makeInitialStates(providers: usageProviders.map(\.provider))
     }
 
     public func weeklyRemainingPercent(for provider: Provider) -> Double? {
@@ -54,15 +57,21 @@ public final class UsageStore: ObservableObject {
         guard beginOperation() else { return }
         defer { isPerformingOperation = false }
 
-        guard let claudeProvider = usageProviders.first(where: { $0.provider == .claude }) as? any ClaudeCredentialImportingProvider else {
+        guard let claudeProvider = credentialCommands.claudeImporter() else {
             requestClaudeReauthentication(now: now)
             return
         }
 
         lastUpdated = now
         markRefreshing(provider: .claude)
-        let importedState = await claudeProvider.importExistingCredentials()
-        merge(importedState)
+        let importedState = await stateFromCredentialImport(provider: .claude) {
+            try await claudeProvider.importExistingCredentials()
+        }
+        if let importedState {
+            merge(importedState)
+        } else {
+            markNotRefreshing(provider: .claude)
+        }
         lastUpdated = nowProvider()
     }
 
@@ -70,14 +79,20 @@ public final class UsageStore: ObservableObject {
         guard beginOperation() else { return }
         defer { isPerformingOperation = false }
 
-        guard let codexProvider = usageProviders.first(where: { $0.provider == .codex }) as? any CodexCredentialImportingProvider else {
+        guard let codexProvider = credentialCommands.codexImporter() else {
             return
         }
 
         lastUpdated = now
         markRefreshing(provider: .codex)
-        let importedState = await codexProvider.importExistingCredentials()
-        merge(importedState)
+        let importedState = await stateFromCredentialImport(provider: .codex) {
+            try await codexProvider.importExistingCredentials()
+        }
+        if let importedState {
+            merge(importedState)
+        } else {
+            markNotRefreshing(provider: .codex)
+        }
         lastUpdated = nowProvider()
     }
 
@@ -103,20 +118,10 @@ public final class UsageStore: ObservableObject {
     public func deleteCachedCredentials(now: Date = Date()) -> Bool {
         guard !isPerformingOperation else { return false }
 
-        var failedProviders = Set<Provider>()
-        for usageProvider in usageProviders {
-            guard let credentialProvider = usageProvider as? any CredentialCachingProvider else {
-                continue
-            }
-            do {
-                try credentialProvider.deleteCachedCredentials()
-            } catch {
-                failedProviders.insert(usageProvider.provider)
-            }
-        }
+        let result = credentialCommands.deleteCachedCredentials()
 
         states = states.map { state in
-            if failedProviders.contains(state.provider) {
+            if result.failedProviders.contains(state.provider) {
                 return ProviderUsageState(
                     provider: state.provider,
                     status: .stale,
@@ -129,6 +134,9 @@ public final class UsageStore: ObservableObject {
                         retryAfter: nil),
                     isRefreshing: false)
             }
+            guard result.deletedProviders.contains(state.provider) else {
+                return state
+            }
             return ProviderUsageState(
                 provider: state.provider,
                 status: .authRequired,
@@ -137,12 +145,12 @@ public final class UsageStore: ObservableObject {
                 lastFailure: UsageFailure(
                     occurredAt: now,
                     code: "credentials_deleted",
-                    message: "資格情報を削除しました。再認証してください。",
+                    message: "UsageBar の資格情報を削除しました。Claude Code / Codex CLIでログイン後、認証情報を再取り込みしてください。",
                     retryAfter: nil),
                 isRefreshing: false)
         }
 
-        return failedProviders.isEmpty
+        return result.didDeleteAll
     }
 
     public func refreshDummyData(now: Date = Date()) {
@@ -163,11 +171,116 @@ public final class UsageStore: ObservableObject {
         lastUpdated = now
         for usageProvider in usageProviders {
             markRefreshing(provider: usageProvider.provider)
-            let fetchedState: ProviderUsageState
-            fetchedState = await usageProvider.fetch()
-            merge(fetchedState)
+        }
+        let fetchedStates = await statesFromFetches()
+        for usageProvider in usageProviders {
+            if let fetchedState = fetchedStates[usageProvider.provider] ?? nil {
+                merge(fetchedState)
+            } else {
+                markNotRefreshing(provider: usageProvider.provider)
+            }
         }
         lastUpdated = nowProvider()
+    }
+
+    private func statesFromFetches() async -> [Provider: ProviderUsageState?] {
+        await withTaskGroup(of: ProviderFetchResult.self, returning: [Provider: ProviderUsageState?].self) { group in
+            for usageProvider in usageProviders {
+                group.addTask {
+                    do {
+                        let snapshot = try await usageProvider.fetchSnapshot()
+                        return ProviderFetchResult(provider: usageProvider.provider, snapshot: snapshot, error: nil)
+                    } catch is CancellationError {
+                        return ProviderFetchResult(provider: usageProvider.provider, snapshot: nil, error: nil)
+                    } catch {
+                        return ProviderFetchResult(provider: usageProvider.provider, snapshot: nil, error: error)
+                    }
+                }
+            }
+
+            var states: [Provider: ProviderUsageState?] = [:]
+            for await result in group {
+                states[result.provider] = state(from: result)
+            }
+            return states
+        }
+    }
+
+    private func state(from result: ProviderFetchResult) -> ProviderUsageState? {
+        if let snapshot = result.snapshot {
+            return ProviderUsageStateFactory.fresh(provider: result.provider, snapshot: snapshot)
+        }
+        guard let error = result.error else { return nil }
+        return failureState(provider: result.provider, error: error)
+    }
+
+    private func stateFromCredentialImport(
+        provider: Provider,
+        importSnapshot: () async throws -> UsageSnapshot)
+        async -> ProviderUsageState?
+    {
+        do {
+            let snapshot = try await importSnapshot()
+            return ProviderUsageStateFactory.fresh(provider: provider, snapshot: snapshot)
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return credentialImportFailureState(provider: provider, error: error)
+        }
+    }
+
+    private func credentialImportFailureState(provider: Provider, error: Error) -> ProviderUsageState {
+        if let displayError = error as? any ProviderUsageDisplayError {
+            return ProviderUsageStateFactory.failure(
+                provider: provider,
+                now: nowProvider(),
+                code: displayError.failureCode,
+                message: displayError.userMessage,
+                requiresAuthentication: displayError.requiresAuthentication)
+        }
+
+        let serviceName = provider == .claude ? "Claude Code" : "Codex CLI"
+        return ProviderUsageStateFactory.failure(
+            provider: provider,
+            now: nowProvider(),
+            code: "auth_required",
+            message: "\(serviceName)でログイン後、UsageBarへ認証情報を再取り込みしてください。",
+            requiresAuthentication: true)
+    }
+
+    private func failureState(provider: Provider, error: Error) -> ProviderUsageState {
+        let displayError = usageDisplayError(provider: provider, error: error)
+        return ProviderUsageStateFactory.failure(
+            provider: provider,
+            now: nowProvider(),
+            code: displayError.failureCode,
+            message: displayError.userMessage,
+            requiresAuthentication: displayError.requiresAuthentication)
+    }
+
+    private func usageDisplayError(provider: Provider, error: Error) -> any ProviderUsageDisplayError {
+        if let error = error as? any ProviderUsageDisplayError {
+            return error
+        }
+        if let keychainError = error as? KeychainClientError {
+            return keychainDisplayError(provider: provider, keychainError: keychainError)
+        }
+
+        switch provider {
+        case .claude:
+            return ClaudeUsageProviderError.unknown
+        case .codex:
+            return CodexUsageProviderError.unknown
+        }
+    }
+
+    private func keychainDisplayError(provider: Provider, keychainError: KeychainClientError) -> any ProviderUsageDisplayError {
+        switch provider {
+        case .claude:
+            return keychainError == .interactionNotAllowed ? ClaudeUsageProviderError.interactionNotAllowed : ClaudeUsageProviderError.authRequired
+        case .codex:
+            return CodexUsageProviderError.authRequired
+        }
     }
 
     private func markRefreshing(provider: Provider) {
@@ -176,6 +289,15 @@ public final class UsageStore: ObservableObject {
             var refreshingState = state
             refreshingState.isRefreshing = true
             return refreshingState
+        }
+    }
+
+    private func markNotRefreshing(provider: Provider) {
+        states = states.map { state in
+            guard state.provider == provider else { return state }
+            var currentState = state
+            currentState.isRefreshing = false
+            return currentState
         }
     }
 
@@ -196,8 +318,8 @@ public final class UsageStore: ObservableObject {
         }
     }
 
-    private static func makeInitialStates() -> [ProviderUsageState] {
-        [Provider.claude, .codex].map { provider in
+    private static func makeInitialStates(providers: [Provider]) -> [ProviderUsageState] {
+        providers.map { provider in
             ProviderUsageState(
                 provider: provider,
                 status: .stale,
@@ -297,4 +419,10 @@ public final class UsageStore: ObservableObject {
                 resetDescription: weeklyReset,
                 resetAt: now.addingTimeInterval(weeklyResetOffset)))
     }
+}
+
+private struct ProviderFetchResult {
+    let provider: Provider
+    let snapshot: UsageSnapshot?
+    let error: Error?
 }

@@ -16,7 +16,7 @@ public protocol KeychainClient: Sendable {
     func deleteGenericPassword(service: String, account: String) throws
 }
 
-public final class SecurityKeychainClient: KeychainClient, @unchecked Sendable {
+public final class SecurityKeychainClient: KeychainClient {
     public static var credentialAccessibility: CFString {
         kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     }

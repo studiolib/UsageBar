@@ -1,6 +1,6 @@
 import Foundation
 
-public final class CodexCredentialStore: @unchecked Sendable {
+public final class CodexCredentialStore: Sendable {
     public static let appService = "UsageBar-CodexOAuth"
     public static let defaultAccount = "default"
 

@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var usageStore: UsageStore
     @Environment(\.dismiss) private var dismiss
+    @State private var isShowingCredentialDeleteConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -24,27 +25,27 @@ struct SettingsView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 10) {
-                Button("Claude を再認証") {
+                Button("Claude 認証情報を再取り込み") {
                     Task {
                         await usageStore.importClaudeCredentials()
                     }
                 }
                 .disabled(usageStore.isPerformingOperation)
 
-                Button("Codex を再認証") {
+                Button("Codex 認証情報を再取り込み") {
                     Task {
                         await usageStore.importCodexCredentials()
                     }
                 }
                 .disabled(usageStore.isPerformingOperation)
 
-                Button("表示キャッシュ削除") {
+                Button("表示中の利用量を消去") {
                     usageStore.clearCachedSnapshots()
                 }
                 .disabled(usageStore.isPerformingOperation)
 
-                Button("資格情報削除") {
-                    usageStore.deleteCachedCredentials()
+                Button("UsageBar資格情報を削除") {
+                    isShowingCredentialDeleteConfirmation = true
                 }
                 .disabled(usageStore.isPerformingOperation)
             }
@@ -61,6 +62,14 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 420)
         .background(Color(nsColor: .windowBackgroundColor))
+        .alert("UsageBar資格情報を削除しますか？", isPresented: $isShowingCredentialDeleteConfirmation) {
+            Button("削除", role: .destructive) {
+                usageStore.deleteCachedCredentials()
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("Claude Code / Codex CLI 本体の資格情報は削除されません。UsageBar専用のKeychain情報だけを削除します。復旧するには、必要に応じてClaude Code / Codex CLIでログイン後、認証情報を再取り込みしてください。")
+        }
     }
 
     private var refreshInterval: Binding<RefreshInterval> {

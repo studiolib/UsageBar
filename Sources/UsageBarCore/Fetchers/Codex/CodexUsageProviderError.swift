@@ -52,3 +52,9 @@ public enum CodexUsageProviderError: Error, Equatable, Sendable {
         }
     }
 }
+
+extension CodexUsageProviderError: ProviderUsageDisplayError {
+    var requiresAuthentication: Bool {
+        self == .authRequired || self == .unauthorized
+    }
+}

@@ -28,7 +28,7 @@ public struct ClaudeOAuthCredentials: Equatable, Sendable {
     }
 }
 
-public final class ClaudeOAuthCredentialStore: @unchecked Sendable {
+public final class ClaudeOAuthCredentialStore: Sendable {
     public static let appService = "UsageBar-ClaudeOAuth"
     public static let claudeCodeService = "Claude Code-credentials"
     public static let defaultAccount = "default"

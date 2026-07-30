@@ -18,10 +18,12 @@ struct UsageWindowRow: View {
             ProgressView(value: window.remainingPercent, total: 100)
                 .tint(accent)
 
-            HStack {
-                Text(resetAtText)
-                Spacer()
-                Text(resetDescriptionText)
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                HStack {
+                    Text(resetAtText)
+                    Spacer()
+                    Text(resetDescriptionText(now: context.date))
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -29,12 +31,10 @@ struct UsageWindowRow: View {
     }
 
     private var resetAtText: String {
-        guard let resetAt = window.resetAt else { return "リセット: 不明" }
-        return "リセット: \(resetAt.formatted(.dateTime.locale(Locale(identifier: "ja_JP")).month().day().weekday(.abbreviated).hour().minute()))"
+        UsageWindowDisplayFormatter.resetAtText(window.resetAt)
     }
 
-    private var resetDescriptionText: String {
-        guard window.resetDescription != "不明" else { return "リセット時刻不明" }
-        return "\(window.resetDescription)にリセット"
+    private func resetDescriptionText(now: Date) -> String {
+        UsageWindowDisplayFormatter.resetDescriptionText(resetAt: window.resetAt, now: now)
     }
 }

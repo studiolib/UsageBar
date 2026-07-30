@@ -33,7 +33,7 @@ public protocol HTTPClient: Sendable {
     func send(_ request: HTTPRequest) async throws -> HTTPResponse
 }
 
-public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
+public final class URLSessionHTTPClient: HTTPClient {
     public init() {}
 
     public func send(_ request: HTTPRequest) async throws -> HTTPResponse {

@@ -57,3 +57,9 @@ public enum ClaudeUsageProviderError: Error, Equatable, Sendable {
         }
     }
 }
+
+extension ClaudeUsageProviderError: ProviderUsageDisplayError {
+    var requiresAuthentication: Bool {
+        self == .authRequired || self == .unauthorized || self == .interactionNotAllowed
+    }
+}
