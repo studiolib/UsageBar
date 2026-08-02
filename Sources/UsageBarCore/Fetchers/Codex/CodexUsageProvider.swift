@@ -1,12 +1,12 @@
 import Foundation
 
-public protocol CodexCredentialImportingProvider: CredentialCachingProvider {
+public protocol CodexCredentialImportingProvider: Sendable {
+    func fetchSnapshot() async throws -> UsageSnapshot
     func importExistingCredentials() async throws -> UsageSnapshot
+    func deleteCachedCredentials() throws
 }
 
 public final class CodexUsageProvider: CodexCredentialImportingProvider {
-    public let provider: Provider = .codex
-
     private let credentialStore: CodexCredentialStore
     private let httpClient: HTTPClient
     private let now: @Sendable () -> Date

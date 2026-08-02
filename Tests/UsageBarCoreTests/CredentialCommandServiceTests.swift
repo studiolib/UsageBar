@@ -5,7 +5,7 @@ final class CredentialCommandServiceTests: XCTestCase {
     func testFindsProviderSpecificImporters() {
         let claudeProvider = StubClaudeCredentialProvider()
         let codexProvider = StubCodexCredentialProvider()
-        let service = CredentialCommandService(usageProviders: [claudeProvider, codexProvider])
+        let service = CredentialCommandService(claudeProvider: claudeProvider, codexProvider: codexProvider)
 
         XCTAssertNotNil(service.claudeImporter())
         XCTAssertNotNil(service.codexImporter())
@@ -14,7 +14,7 @@ final class CredentialCommandServiceTests: XCTestCase {
     func testDeleteCachedCredentialsReportsOnlyFailedProviders() {
         let claudeProvider = StubClaudeCredentialProvider()
         let codexProvider = StubCodexCredentialProvider(shouldThrowOnDelete: true)
-        let service = CredentialCommandService(usageProviders: [claudeProvider, codexProvider])
+        let service = CredentialCommandService(claudeProvider: claudeProvider, codexProvider: codexProvider)
 
         let result = service.deleteCachedCredentials()
 
@@ -27,7 +27,6 @@ final class CredentialCommandServiceTests: XCTestCase {
 }
 
 private final class StubClaudeCredentialProvider: ClaudeCredentialImportingProvider {
-    let provider: Provider = .claude
     private let shouldThrowOnDelete: Bool
     private let deleteCallCountStore = Locked(0)
 
@@ -40,11 +39,11 @@ private final class StubClaudeCredentialProvider: ClaudeCredentialImportingProvi
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        snapshot(provider: provider)
+        snapshot(provider: .claude)
     }
 
     func importExistingCredentials() async throws -> UsageSnapshot {
-        snapshot(provider: provider)
+        snapshot(provider: .claude)
     }
 
     func deleteCachedCredentials() throws {
@@ -58,7 +57,6 @@ private final class StubClaudeCredentialProvider: ClaudeCredentialImportingProvi
 }
 
 private final class StubCodexCredentialProvider: CodexCredentialImportingProvider {
-    let provider: Provider = .codex
     private let shouldThrowOnDelete: Bool
     private let deleteCallCountStore = Locked(0)
 
@@ -71,11 +69,11 @@ private final class StubCodexCredentialProvider: CodexCredentialImportingProvide
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
-        snapshot(provider: provider)
+        snapshot(provider: .codex)
     }
 
     func importExistingCredentials() async throws -> UsageSnapshot {
-        snapshot(provider: provider)
+        snapshot(provider: .codex)
     }
 
     func deleteCachedCredentials() throws {

@@ -7,28 +7,54 @@ public final class UsageStore: ObservableObject {
     @Published public private(set) var lastUpdated: Date
     @Published public private(set) var isPerformingOperation = false
 
-    private let usageProviders: [any UsageProvider]
+    private let claudeProvider: (any ClaudeCredentialImportingProvider)?
+    private let codexProvider: (any CodexCredentialImportingProvider)?
     private let credentialCommands: CredentialCommandService
     private let nowProvider: @MainActor () -> Date
+    private let isDummyDataMode: Bool
 
-    public init(now: Date = Date(), nowProvider: @escaping @MainActor () -> Date = Date.init) {
-        usageProviders = []
-        credentialCommands = CredentialCommandService(usageProviders: [])
+    public convenience init(nowProvider: @escaping @MainActor () -> Date = Date.init) {
+        self.init(
+            now: nowProvider(),
+            claudeProvider: ClaudeUsageProvider(),
+            codexProvider: CodexUsageProvider(),
+            nowProvider: nowProvider)
+    }
+
+    public init(dummyDataAt now: Date = Date(), nowProvider: @escaping @MainActor () -> Date = Date.init) {
+        claudeProvider = nil
+        codexProvider = nil
+        credentialCommands = CredentialCommandService(
+            claudeProvider: nil,
+            codexProvider: nil)
         self.nowProvider = nowProvider
+        isDummyDataMode = true
         lastUpdated = now
         states = Self.makeDummyStates(now: now)
     }
 
-    public init(
+    init(
         now: Date = Date(),
-        usageProviders: [any UsageProvider],
+        claudeProvider: (any ClaudeCredentialImportingProvider)?,
+        codexProvider: (any CodexCredentialImportingProvider)?,
         nowProvider: @escaping @MainActor () -> Date = Date.init)
     {
-        self.usageProviders = usageProviders
-        credentialCommands = CredentialCommandService(usageProviders: usageProviders)
+        self.claudeProvider = claudeProvider
+        self.codexProvider = codexProvider
+        credentialCommands = CredentialCommandService(
+            claudeProvider: claudeProvider,
+            codexProvider: codexProvider)
         self.nowProvider = nowProvider
+        isDummyDataMode = false
         lastUpdated = now
-        states = Self.makeInitialStates(providers: usageProviders.map(\.provider))
+        var providers: [Provider] = []
+        if claudeProvider != nil {
+            providers.append(.claude)
+        }
+        if codexProvider != nil {
+            providers.append(.codex)
+        }
+        states = Self.makeInitialStates(providers: providers)
     }
 
     public func weeklyRemainingPercent(for provider: Provider) -> Double? {
@@ -163,37 +189,54 @@ public final class UsageStore: ObservableObject {
         guard beginOperation() else { return }
         defer { isPerformingOperation = false }
 
-        guard !usageProviders.isEmpty else {
+        guard !isDummyDataMode else {
             refreshDummyData(now: now)
             return
         }
 
+        guard claudeProvider != nil || codexProvider != nil else {
+            lastUpdated = nowProvider()
+            return
+        }
+
         lastUpdated = now
-        for usageProvider in usageProviders {
-            markRefreshing(provider: usageProvider.provider)
+        if claudeProvider != nil {
+            markRefreshing(provider: .claude)
+        }
+        if codexProvider != nil {
+            markRefreshing(provider: .codex)
         }
         let fetchedStates = await statesFromFetches()
-        for usageProvider in usageProviders {
-            if let fetchedState = fetchedStates[usageProvider.provider] ?? nil {
-                merge(fetchedState)
-            } else {
-                markNotRefreshing(provider: usageProvider.provider)
-            }
-        }
+        mergeFetchedState(fetchedStates, for: .claude, isConfigured: claudeProvider != nil)
+        mergeFetchedState(fetchedStates, for: .codex, isConfigured: codexProvider != nil)
         lastUpdated = nowProvider()
     }
 
     private func statesFromFetches() async -> [Provider: ProviderUsageState?] {
         await withTaskGroup(of: ProviderFetchResult.self, returning: [Provider: ProviderUsageState?].self) { group in
-            for usageProvider in usageProviders {
+            if let claudeProvider {
                 group.addTask {
                     do {
-                        let snapshot = try await usageProvider.fetchSnapshot()
-                        return ProviderFetchResult(provider: usageProvider.provider, snapshot: snapshot, error: nil)
+                        let snapshot = try await claudeProvider.fetchSnapshot()
+                        try validateSnapshot(snapshot, expected: .claude)
+                        return ProviderFetchResult(provider: .claude, snapshot: snapshot, error: nil)
                     } catch is CancellationError {
-                        return ProviderFetchResult(provider: usageProvider.provider, snapshot: nil, error: nil)
+                        return ProviderFetchResult(provider: .claude, snapshot: nil, error: nil)
                     } catch {
-                        return ProviderFetchResult(provider: usageProvider.provider, snapshot: nil, error: error)
+                        return ProviderFetchResult(provider: .claude, snapshot: nil, error: error)
+                    }
+                }
+            }
+            if let codexProvider {
+                group.addTask {
+                    do {
+                        let snapshot = try await codexProvider.fetchSnapshot()
+                        try validateSnapshot(snapshot, expected: .codex)
+                        return ProviderFetchResult(provider: .codex, snapshot: snapshot, error: nil)
+                    } catch is CancellationError {
+                        return ProviderFetchResult(provider: .codex, snapshot: nil, error: nil)
+                    } catch {
+                        return ProviderFetchResult(provider: .codex, snapshot: nil, error: error)
                     }
                 }
             }
@@ -214,6 +257,19 @@ public final class UsageStore: ObservableObject {
         return failureState(provider: result.provider, error: error)
     }
 
+    private func mergeFetchedState(
+        _ fetchedStates: [Provider: ProviderUsageState?],
+        for provider: Provider,
+        isConfigured: Bool)
+    {
+        guard isConfigured else { return }
+        if let fetchedState = fetchedStates[provider] ?? nil {
+            merge(fetchedState)
+        } else {
+            markNotRefreshing(provider: provider)
+        }
+    }
+
     private func stateFromCredentialImport(
         provider: Provider,
         importSnapshot: () async throws -> UsageSnapshot)
@@ -221,6 +277,7 @@ public final class UsageStore: ObservableObject {
     {
         do {
             let snapshot = try await importSnapshot()
+            try validateSnapshot(snapshot, expected: provider)
             return ProviderUsageStateFactory.fresh(provider: provider, snapshot: snapshot)
         } catch is CancellationError {
             return nil
@@ -425,4 +482,21 @@ private struct ProviderFetchResult {
     let provider: Provider
     let snapshot: UsageSnapshot?
     let error: Error?
+}
+
+private func validateSnapshot(_ snapshot: UsageSnapshot, expected: Provider) throws {
+    guard snapshot.provider == expected else {
+        throw SnapshotProviderMismatchError(expected: expected, actual: snapshot.provider)
+    }
+}
+
+private struct SnapshotProviderMismatchError: Error, ProviderUsageDisplayError {
+    let expected: Provider
+    let actual: Provider
+
+    var failureCode: String { "provider_mismatch" }
+    var userMessage: String {
+        "\(expected.displayName) の使用量データを確認できませんでした。"
+    }
+    var requiresAuthentication: Bool { false }
 }

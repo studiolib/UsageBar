@@ -5,37 +5,47 @@ struct CredentialDeleteResult {
     let failedProviders: Set<Provider>
 
     var didDeleteAll: Bool {
-        failedProviders.isEmpty
+        !deletedProviders.isEmpty && failedProviders.isEmpty
     }
 }
 
 struct CredentialCommandService {
-    private let usageProviders: [any UsageProvider]
+    private let claudeImporterProvider: (any ClaudeCredentialImportingProvider)?
+    private let codexImporterProvider: (any CodexCredentialImportingProvider)?
 
-    init(usageProviders: [any UsageProvider]) {
-        self.usageProviders = usageProviders
+    init(
+        claudeProvider: (any ClaudeCredentialImportingProvider)?,
+        codexProvider: (any CodexCredentialImportingProvider)?)
+    {
+        claudeImporterProvider = claudeProvider
+        codexImporterProvider = codexProvider
     }
 
     func claudeImporter() -> (any ClaudeCredentialImportingProvider)? {
-        usageProviders.first { $0.provider == .claude } as? any ClaudeCredentialImportingProvider
+        claudeImporterProvider
     }
 
     func codexImporter() -> (any CodexCredentialImportingProvider)? {
-        usageProviders.first { $0.provider == .codex } as? any CodexCredentialImportingProvider
+        codexImporterProvider
     }
 
     func deleteCachedCredentials() -> CredentialDeleteResult {
         var deletedProviders = Set<Provider>()
         var failedProviders = Set<Provider>()
-        for usageProvider in usageProviders {
-            guard let credentialProvider = usageProvider as? any CredentialCachingProvider else {
-                continue
-            }
+        if let claudeImporterProvider {
             do {
-                try credentialProvider.deleteCachedCredentials()
-                deletedProviders.insert(usageProvider.provider)
+                try claudeImporterProvider.deleteCachedCredentials()
+                deletedProviders.insert(.claude)
             } catch {
-                failedProviders.insert(usageProvider.provider)
+                failedProviders.insert(.claude)
+            }
+        }
+        if let codexImporterProvider {
+            do {
+                try codexImporterProvider.deleteCachedCredentials()
+                deletedProviders.insert(.codex)
+            } catch {
+                failedProviders.insert(.codex)
             }
         }
         return CredentialDeleteResult(

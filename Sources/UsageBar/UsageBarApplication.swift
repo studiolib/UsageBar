@@ -8,7 +8,7 @@ import UsageBarCore
 final class UsageBarApplication: NSObject, NSApplicationDelegate {
     private static let appDelegate = UsageBarApplication()
 
-    private let store = UsageStore(usageProviders: [ClaudeUsageProvider(), CodexUsageProvider()])
+    private let store = UsageStore()
     private let settingsStore = SettingsStore()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?

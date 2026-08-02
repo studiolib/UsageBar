@@ -1,12 +1,12 @@
 import Foundation
 
-public protocol ClaudeCredentialImportingProvider: CredentialCachingProvider {
+public protocol ClaudeCredentialImportingProvider: Sendable {
+    func fetchSnapshot() async throws -> UsageSnapshot
     func importExistingCredentials() async throws -> UsageSnapshot
+    func deleteCachedCredentials() throws
 }
 
 public final class ClaudeUsageProvider: ClaudeCredentialImportingProvider {
-    public let provider: Provider = .claude
-
     private let credentialStore: ClaudeOAuthCredentialStore
     private let httpClient: HTTPClient
     private let now: @Sendable () -> Date

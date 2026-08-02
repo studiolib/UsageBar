@@ -5,7 +5,7 @@ final class UsageStoreTests: XCTestCase {
     @MainActor
     func testInitialStateContainsCodexAndClaudeSnapshots() {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let store = UsageStore(now: now)
+        let store = UsageStore(dummyDataAt: now)
 
         XCTAssertEqual(store.states.map(\.provider), [.claude, .codex])
         XCTAssertEqual(store.lastUpdated, now)
@@ -23,10 +23,35 @@ final class UsageStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testProductionInitializerConfiguresClaudeAndCodexProviders() {
+        let now = Date(timeIntervalSince1970: 1_785_196_800)
+        let store = UsageStore(nowProvider: { now })
+
+        XCTAssertEqual(store.states.map(\.provider), [.claude, .codex])
+        XCTAssertTrue(store.states.allSatisfy { $0.status == .stale })
+        XCTAssertEqual(store.lastUpdated, now)
+    }
+
+    @MainActor
+    func testEmptyProviderConfigurationDoesNotCreateDummyDataOrReportDeletionSuccess() async {
+        let now = Date(timeIntervalSince1970: 1_785_196_800)
+        let store = UsageStore(
+            now: now,
+            claudeProvider: nil,
+            codexProvider: nil,
+            nowProvider: { now })
+
+        await store.refreshUsage(now: now)
+
+        XCTAssertTrue(store.states.isEmpty)
+        XCTAssertFalse(store.deleteCachedCredentials(now: now))
+    }
+
+    @MainActor
     func testRefreshUpdatesTimestampAndKeepsLastSuccessfulSnapshots() {
         let initial = Date(timeIntervalSince1970: 1_785_196_800)
         let refreshed = Date(timeIntervalSince1970: 1_785_197_100)
-        let store = UsageStore(now: initial)
+        let store = UsageStore(dummyDataAt: initial)
 
         store.refreshDummyData(now: refreshed)
 
@@ -38,7 +63,7 @@ final class UsageStoreTests: XCTestCase {
     @MainActor
     func testClaudeReauthenticationClearsOnlyClaudeSnapshot() {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let store = UsageStore(now: now)
+        let store = UsageStore(dummyDataAt: now)
 
         store.requestClaudeReauthentication(now: now)
 
@@ -55,7 +80,7 @@ final class UsageStoreTests: XCTestCase {
     @MainActor
     func testClearCachedSnapshotsClearsEveryProviderSnapshot() {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let store = UsageStore(now: now)
+        let store = UsageStore(dummyDataAt: now)
 
         store.clearCachedSnapshots(now: now)
 
@@ -70,11 +95,12 @@ final class UsageStoreTests: XCTestCase {
     @MainActor
     func testClearCachedSnapshotsDoesNotDeleteCredentials() {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let claudeProvider = StubCredentialCachingProvider(provider: .claude)
-        let codexProvider = StubCredentialCachingProvider(provider: .codex)
+        let claudeProvider = StubClaudeCredentialCachingProvider()
+        let codexProvider = StubCodexCredentialCachingProvider()
         let store = UsageStore(
             now: now,
-            usageProviders: [claudeProvider, codexProvider],
+            claudeProvider: claudeProvider,
+            codexProvider: codexProvider,
             nowProvider: { now })
 
         store.clearCachedSnapshots(now: now)
@@ -87,11 +113,12 @@ final class UsageStoreTests: XCTestCase {
     @MainActor
     func testDeleteCachedCredentialsDeletesEveryProviderCredentialCache() {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let claudeProvider = StubCredentialCachingProvider(provider: .claude)
-        let codexProvider = StubCredentialCachingProvider(provider: .codex)
+        let claudeProvider = StubClaudeCredentialCachingProvider()
+        let codexProvider = StubCodexCredentialCachingProvider()
         let store = UsageStore(
             now: now,
-            usageProviders: [claudeProvider, codexProvider],
+            claudeProvider: claudeProvider,
+            codexProvider: codexProvider,
             nowProvider: { now })
 
         let didDelete = store.deleteCachedCredentials(now: now)
@@ -106,11 +133,12 @@ final class UsageStoreTests: XCTestCase {
     @MainActor
     func testDeleteCachedCredentialsReportsProviderDeletionFailure() {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let claudeProvider = StubCredentialCachingProvider(provider: .claude)
-        let codexProvider = StubCredentialCachingProvider(provider: .codex, shouldThrowOnDelete: true)
+        let claudeProvider = StubClaudeCredentialCachingProvider()
+        let codexProvider = StubCodexCredentialCachingProvider(shouldThrowOnDelete: true)
         let store = UsageStore(
             now: now,
-            usageProviders: [claudeProvider, codexProvider],
+            claudeProvider: claudeProvider,
+            codexProvider: codexProvider,
             nowProvider: { now })
 
         let didDelete = store.deleteCachedCredentials(now: now)
@@ -122,29 +150,6 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(codexProvider.deleteCallCount, 1)
         XCTAssertEqual(claude?.lastFailure?.code, "credentials_deleted")
         XCTAssertEqual(codex?.lastFailure?.code, "credentials_delete_failed")
-    }
-
-    @MainActor
-    func testDeleteCachedCredentialsLeavesNonCachingProvidersUnchanged() {
-        let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let claudeProvider = StubCredentialCachingProvider(provider: .claude)
-        let codexProvider = StubUsageProvider(
-            provider: .codex,
-            snapshot: snapshot(provider: .codex, remainingPercent: 70, capturedAt: now))
-        let store = UsageStore(
-            now: now,
-            usageProviders: [claudeProvider, codexProvider],
-            nowProvider: { now })
-
-        let didDelete = store.deleteCachedCredentials(now: now)
-        let claude = store.states.first { $0.provider == .claude }
-        let codex = store.states.first { $0.provider == .codex }
-
-        XCTAssertTrue(didDelete)
-        XCTAssertEqual(claude?.status, .authRequired)
-        XCTAssertEqual(claude?.lastFailure?.code, "credentials_deleted")
-        XCTAssertEqual(codex?.status, .stale)
-        XCTAssertNil(codex?.lastFailure)
     }
 
     @MainActor
@@ -181,19 +186,15 @@ final class UsageStoreTests: XCTestCase {
                 resetAt: now.addingTimeInterval(86_400)))
         let store = UsageStore(
             now: now,
-            usageProviders: [
-                StubUsageProvider(
-                    provider: .codex,
-                    snapshot: codexSnapshot),
-                StubUsageProvider(
-                    provider: .claude,
-                    snapshot: claudeSnapshot),
-            ],
+            claudeProvider: StubClaudeUsageProvider(
+                snapshot: claudeSnapshot),
+            codexProvider: StubCodexUsageProvider(
+                snapshot: codexSnapshot),
             nowProvider: { now })
 
         await store.refreshUsage(now: now)
 
-        XCTAssertEqual(store.states.map(\.provider), [.codex, .claude])
+        XCTAssertEqual(store.states.map(\.provider), [.claude, .codex])
         XCTAssertEqual(store.weeklyRemainingPercent(for: .codex), 70)
         XCTAssertEqual(store.weeklyRemainingPercent(for: .claude), 60)
         XCTAssertEqual(store.lastUpdated, now)
@@ -203,15 +204,14 @@ final class UsageStoreTests: XCTestCase {
     func testRefreshUsagePreservesLastSuccessfulSnapshotWhenOneProviderFails() async {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
         let later = Date(timeIntervalSince1970: 1_785_197_100)
-        let claudeProvider = MutableUsageProvider(
-            provider: .claude,
+        let claudeProvider = MutableClaudeUsageProvider(
             snapshot: snapshot(provider: .claude, remainingPercent: 80, capturedAt: now))
-        let codexProvider = MutableUsageProvider(
-            provider: .codex,
+        let codexProvider = MutableCodexUsageProvider(
             snapshot: snapshot(provider: .codex, remainingPercent: 70, capturedAt: now))
         let store = UsageStore(
             now: now,
-            usageProviders: [claudeProvider, codexProvider],
+            claudeProvider: claudeProvider,
+            codexProvider: codexProvider,
             nowProvider: { later })
 
         await store.refreshUsage(now: now)
@@ -234,9 +234,8 @@ final class UsageStoreTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
         let store = UsageStore(
             now: now,
-            usageProviders: [
-                FailingUsageProvider(provider: .claude, error: ClaudeUsageProviderError.authRequired),
-            ],
+            claudeProvider: FailingClaudeUsageProvider(error: ClaudeUsageProviderError.authRequired),
+            codexProvider: nil,
             nowProvider: { now })
 
         await store.refreshUsage(now: now)
@@ -247,14 +246,32 @@ final class UsageStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testRefreshUsageRejectsSnapshotFromAnotherProvider() async {
+        let now = Date(timeIntervalSince1970: 1_785_196_800)
+        let store = UsageStore(
+            now: now,
+            claudeProvider: StubClaudeUsageProvider(
+                snapshot: snapshot(provider: .codex, remainingPercent: 70, capturedAt: now)),
+            codexProvider: nil,
+            nowProvider: { now })
+
+        await store.refreshUsage(now: now)
+
+        let claude = store.states.first { $0.provider == .claude }
+        XCTAssertEqual(claude?.status, .stale)
+        XCTAssertEqual(claude?.lastFailure?.code, "provider_mismatch")
+        XCTAssertNil(claude?.lastSuccessful)
+    }
+
+    @MainActor
     func testRefreshUsageIgnoresCancellationAndKeepsExistingState() async {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
-        let provider = MutableUsageProvider(
-            provider: .codex,
+        let provider = MutableCodexUsageProvider(
             snapshot: snapshot(provider: .codex, remainingPercent: 90, capturedAt: now))
         let store = UsageStore(
             now: now,
-            usageProviders: [provider],
+            claudeProvider: nil,
+            codexProvider: provider,
             nowProvider: { now })
 
         await store.refreshUsage(now: now)
@@ -275,7 +292,8 @@ final class UsageStoreTests: XCTestCase {
         let provider = ThrowingClaudeImportProvider()
         let store = UsageStore(
             now: now,
-            usageProviders: [provider],
+            claudeProvider: provider,
+            codexProvider: nil,
             nowProvider: { now })
 
         await store.importClaudeCredentials(now: now)
@@ -310,10 +328,8 @@ final class UsageStoreTests: XCTestCase {
                 resetAt: now.addingTimeInterval(172_800)))
         let store = UsageStore(
             now: now,
-            usageProviders: [
-                StubClaudeUsageProvider(
-                    snapshot: snapshot),
-            ],
+            claudeProvider: StubClaudeUsageProvider(snapshot: snapshot),
+            codexProvider: nil,
             nowProvider: { now })
 
         await store.importClaudeCredentials(now: now)
@@ -340,10 +356,8 @@ final class UsageStoreTests: XCTestCase {
                 resetAt: now.addingTimeInterval(172_800)))
         let store = UsageStore(
             now: now,
-            usageProviders: [
-                StubCodexUsageProvider(
-                    snapshot: snapshot),
-            ],
+            claudeProvider: nil,
+            codexProvider: StubCodexUsageProvider(snapshot: snapshot),
             nowProvider: { now })
 
         await store.importCodexCredentials(now: now)
@@ -357,16 +371,22 @@ final class UsageStoreTests: XCTestCase {
     func testRefreshUsagePreventsConcurrentOperations() async {
         let now = Date(timeIntervalSince1970: 1_785_196_800)
         let gate = AsyncOperationGate()
-        let provider = BlockingUsageProvider(provider: .claude, gate: gate)
+        let provider = BlockingClaudeUsageProvider(gate: gate)
         let store = UsageStore(
             now: now,
-            usageProviders: [provider],
+            claudeProvider: provider,
+            codexProvider: nil,
             nowProvider: { now })
 
         let firstRefresh = Task { @MainActor in
             await store.refreshUsage(now: now)
         }
-        await gate.waitForStart()
+        guard await gate.waitForStart() else {
+            await gate.release()
+            await firstRefresh.value
+            XCTFail("最初のProvider取得が開始されませんでした")
+            return
+        }
 
         XCTAssertTrue(store.isPerformingOperation)
 
@@ -387,16 +407,19 @@ final class UsageStoreTests: XCTestCase {
         let gate = AsyncOperationGate()
         let store = UsageStore(
             now: now,
-            usageProviders: [
-                BlockingUsageProvider(provider: .claude, gate: gate),
-                BlockingUsageProvider(provider: .codex, gate: gate),
-            ],
+            claudeProvider: BlockingClaudeUsageProvider(gate: gate),
+            codexProvider: BlockingCodexUsageProvider(gate: gate),
             nowProvider: { now })
 
         let refresh = Task { @MainActor in
             await store.refreshUsage(now: now)
         }
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        guard await gate.waitForFetchCalls(2) else {
+            await gate.release()
+            await refresh.value
+            XCTFail("ClaudeとCodexの取得が並列に開始されませんでした")
+            return
+        }
 
         let fetchCallCount = await gate.fetchCallCount()
         XCTAssertEqual(fetchCallCount, 2)
@@ -424,37 +447,25 @@ private func snapshot(provider: Provider, remainingPercent: Double, capturedAt: 
 }
 
 private actor AsyncOperationGate {
-    private var hasStarted = false
     private var isReleased = false
     private var fetchCalls = 0
-    private var startContinuation: CheckedContinuation<Void, Never>?
-    private var targetFetchCallCount = 0
-    private var targetFetchCallContinuation: CheckedContinuation<Void, Never>?
     private var releaseContinuations: [CheckedContinuation<Void, Never>] = []
 
     func markStarted() {
         fetchCalls += 1
-        hasStarted = true
-        startContinuation?.resume()
-        startContinuation = nil
-        if fetchCalls >= targetFetchCallCount {
-            releaseTargetFetchCallContinuation()
-        }
     }
 
-    func waitForStart() async {
-        guard !hasStarted else { return }
-        await withCheckedContinuation { continuation in
-            startContinuation = continuation
-        }
+    func waitForStart(timeoutNanoseconds: UInt64 = 1_000_000_000) async -> Bool {
+        await waitForFetchCalls(1, timeoutNanoseconds: timeoutNanoseconds)
     }
 
-    func waitForFetchCalls(_ count: Int) async {
-        guard fetchCalls < count else { return }
-        await withCheckedContinuation { continuation in
-            targetFetchCallCount = count
-            targetFetchCallContinuation = continuation
+    func waitForFetchCalls(_ count: Int, timeoutNanoseconds: UInt64 = 1_000_000_000) async -> Bool {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutNanoseconds) / 1_000_000_000)
+        while fetchCalls < count {
+            guard Date() < deadline else { return false }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
+        return true
     }
 
     func waitForRelease() async {
@@ -474,27 +485,12 @@ private actor AsyncOperationGate {
         fetchCalls
     }
 
-    private func releaseTargetFetchCallContinuation() {
-        targetFetchCallContinuation?.resume()
-        targetFetchCallContinuation = nil
-    }
 }
 
-private struct StubUsageProvider: UsageProvider {
-    let provider: Provider
-    let snapshot: UsageSnapshot
-
-    func fetchSnapshot() async throws -> UsageSnapshot {
-        snapshot
-    }
-}
-
-private final class MutableUsageProvider: UsageProvider {
-    let provider: Provider
+private final class MutableClaudeUsageProvider: ClaudeCredentialImportingProvider {
     private let resultStore: Locked<Result<UsageSnapshot, MutableUsageProviderFailure>>
 
-    init(provider: Provider, snapshot: UsageSnapshot) {
-        self.provider = provider
+    init(snapshot: UsageSnapshot) {
         resultStore = Locked(.success(snapshot))
     }
 
@@ -524,6 +520,55 @@ private final class MutableUsageProvider: UsageProvider {
             }
         }
     }
+
+    func importExistingCredentials() async throws -> UsageSnapshot {
+        try await fetchSnapshot()
+    }
+
+    func deleteCachedCredentials() throws {
+    }
+}
+
+private final class MutableCodexUsageProvider: CodexCredentialImportingProvider {
+    private let resultStore: Locked<Result<UsageSnapshot, MutableUsageProviderFailure>>
+
+    init(snapshot: UsageSnapshot) {
+        resultStore = Locked(.success(snapshot))
+    }
+
+    func setSnapshot(_ snapshot: UsageSnapshot) {
+        resultStore.withLock {
+            $0 = .success(snapshot)
+        }
+    }
+
+    func setFailure(_ failure: MutableUsageProviderFailure) {
+        resultStore.withLock {
+            $0 = .failure(failure)
+        }
+    }
+
+    func fetchSnapshot() async throws -> UsageSnapshot {
+        let result = resultStore.withLock { $0 }
+        switch result {
+        case let .success(snapshot):
+            return snapshot
+        case let .failure(failure):
+            switch failure {
+            case .cancellation:
+                throw CancellationError()
+            case let .claude(error):
+                throw error
+            }
+        }
+    }
+
+    func importExistingCredentials() async throws -> UsageSnapshot {
+        try await fetchSnapshot()
+    }
+
+    func deleteCachedCredentials() throws {
+    }
 }
 
 private enum MutableUsageProviderFailure: Error, Sendable {
@@ -531,34 +576,45 @@ private enum MutableUsageProviderFailure: Error, Sendable {
     case claude(ClaudeUsageProviderError)
 }
 
-private struct FailingUsageProvider: UsageProvider {
-    let provider: Provider
+private struct FailingClaudeUsageProvider: ClaudeCredentialImportingProvider {
     let error: ClaudeUsageProviderError
 
     func fetchSnapshot() async throws -> UsageSnapshot {
         throw error
     }
+
+    func importExistingCredentials() async throws -> UsageSnapshot {
+        throw error
+    }
+
+    func deleteCachedCredentials() throws {
+    }
 }
 
-private struct BlockingUsageProvider: UsageProvider {
-    let provider: Provider
+private struct BlockingClaudeUsageProvider: ClaudeCredentialImportingProvider {
     let gate: AsyncOperationGate
 
     func fetchSnapshot() async throws -> UsageSnapshot {
         await gate.markStarted()
         await gate.waitForRelease()
         return UsageSnapshot(
-            provider: provider,
-            accountLabel: provider.displayName,
-            planLabel: provider.displayName,
+            provider: .claude,
+            accountLabel: Provider.claude.displayName,
+            planLabel: Provider.claude.displayName,
             capturedAt: Date(timeIntervalSince1970: 0),
             shortWindow: nil,
             weeklyWindow: nil)
     }
+
+    func importExistingCredentials() async throws -> UsageSnapshot {
+        try await fetchSnapshot()
+    }
+
+    func deleteCachedCredentials() throws {
+    }
 }
 
 private struct StubClaudeUsageProvider: ClaudeCredentialImportingProvider {
-    let provider: Provider = .claude
     let snapshot: UsageSnapshot
 
     func fetchSnapshot() async throws -> UsageSnapshot {
@@ -574,8 +630,6 @@ private struct StubClaudeUsageProvider: ClaudeCredentialImportingProvider {
 }
 
 private struct ThrowingClaudeImportProvider: ClaudeCredentialImportingProvider {
-    let provider: Provider = .claude
-
     func fetchSnapshot() async throws -> UsageSnapshot {
         throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "broken"))
     }
@@ -589,7 +643,6 @@ private struct ThrowingClaudeImportProvider: ClaudeCredentialImportingProvider {
 }
 
 private struct StubCodexUsageProvider: CodexCredentialImportingProvider {
-    let provider: Provider = .codex
     let snapshot: UsageSnapshot
 
     func fetchSnapshot() async throws -> UsageSnapshot {
@@ -604,8 +657,7 @@ private struct StubCodexUsageProvider: CodexCredentialImportingProvider {
     }
 }
 
-private final class StubCredentialCachingProvider: CredentialCachingProvider {
-    let provider: Provider
+private final class StubClaudeCredentialCachingProvider: ClaudeCredentialImportingProvider {
     private let shouldThrowOnDelete: Bool
     private let deleteCallCountStore = Locked(0)
 
@@ -613,19 +665,81 @@ private final class StubCredentialCachingProvider: CredentialCachingProvider {
         deleteCallCountStore.withLock { $0 }
     }
 
-    init(provider: Provider, shouldThrowOnDelete: Bool = false) {
-        self.provider = provider
+    init(shouldThrowOnDelete: Bool = false) {
         self.shouldThrowOnDelete = shouldThrowOnDelete
     }
 
     func fetchSnapshot() async throws -> UsageSnapshot {
         UsageSnapshot(
-            provider: provider,
-            accountLabel: provider.displayName,
-            planLabel: provider.displayName,
+            provider: .claude,
+            accountLabel: Provider.claude.displayName,
+            planLabel: Provider.claude.displayName,
             capturedAt: Date(timeIntervalSince1970: 0),
             shortWindow: nil,
             weeklyWindow: nil)
+    }
+
+    func importExistingCredentials() async throws -> UsageSnapshot {
+        try await fetchSnapshot()
+    }
+
+    func deleteCachedCredentials() throws {
+        deleteCallCountStore.withLock {
+            $0 += 1
+        }
+        if shouldThrowOnDelete {
+            throw KeychainClientError.accessDenied
+        }
+    }
+}
+
+private struct BlockingCodexUsageProvider: CodexCredentialImportingProvider {
+    let gate: AsyncOperationGate
+
+    func fetchSnapshot() async throws -> UsageSnapshot {
+        await gate.markStarted()
+        await gate.waitForRelease()
+        return UsageSnapshot(
+            provider: .codex,
+            accountLabel: Provider.codex.displayName,
+            planLabel: Provider.codex.displayName,
+            capturedAt: Date(timeIntervalSince1970: 0),
+            shortWindow: nil,
+            weeklyWindow: nil)
+    }
+
+    func importExistingCredentials() async throws -> UsageSnapshot {
+        try await fetchSnapshot()
+    }
+
+    func deleteCachedCredentials() throws {
+    }
+}
+
+private final class StubCodexCredentialCachingProvider: CodexCredentialImportingProvider {
+    private let shouldThrowOnDelete: Bool
+    private let deleteCallCountStore = Locked(0)
+
+    var deleteCallCount: Int {
+        deleteCallCountStore.withLock { $0 }
+    }
+
+    init(shouldThrowOnDelete: Bool = false) {
+        self.shouldThrowOnDelete = shouldThrowOnDelete
+    }
+
+    func fetchSnapshot() async throws -> UsageSnapshot {
+        UsageSnapshot(
+            provider: .codex,
+            accountLabel: Provider.codex.displayName,
+            planLabel: Provider.codex.displayName,
+            capturedAt: Date(timeIntervalSince1970: 0),
+            shortWindow: nil,
+            weeklyWindow: nil)
+    }
+
+    func importExistingCredentials() async throws -> UsageSnapshot {
+        try await fetchSnapshot()
     }
 
     func deleteCachedCredentials() throws {
